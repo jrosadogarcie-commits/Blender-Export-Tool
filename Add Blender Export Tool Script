@@ -14,6 +14,86 @@ def get_desktop_path():
         return os.path.join(os.path.expanduser("~"), "Desktop")
 
 # =============================================================
+# Presets de exportación por motor
+# =============================================================
+EXPORT_PRESETS = {
+    "UNREAL": {
+        "fbx": dict(
+            apply_unit_scale=True,
+            bake_space_transform=True,
+            axis_forward='-Z',
+            axis_up='Y',
+            mesh_smooth_type='FACE',
+            add_leaf_bones=False,
+            use_armature_deform_only=True
+        ),
+        "obj": dict(
+            forward_axis='-Z',
+            up_axis='Y',
+        )
+    },
+    "UNITY": {
+        "fbx": dict(
+            apply_unit_scale=True,
+            bake_space_transform=False,
+            axis_forward='-Z',
+            axis_up='Y',
+            mesh_smooth_type='FACE',
+            add_leaf_bones=False,
+        ),
+        "obj": dict(
+            forward_axis='-Z',
+            up_axis='Y',
+        )
+    },
+    "GODOT": {
+        "fbx": dict(
+            apply_unit_scale=True,
+            bake_space_transform=False,
+            axis_forward='-Z',
+            axis_up='Y',
+            mesh_smooth_type='EDGE',
+            add_leaf_bones=False,
+        ),
+        "obj": dict(
+            forward_axis='-Z',
+            up_axis='Y',
+        )
+    },
+    "MAYA": {
+        "fbx": dict(
+            apply_unit_scale=True,
+            global_scale=100.0,  # Blender (m) -> Maya (cm)
+            bake_space_transform=False,
+            axis_forward='-Z',
+            axis_up='Y',
+            mesh_smooth_type='FACE',
+            add_leaf_bones=False,
+            use_armature_deform_only=True
+        ),
+        "obj": dict(
+            forward_axis='-Z',
+            up_axis='Y',
+            global_scale=100.0
+        )
+    },
+    "GENERIC": {
+        "fbx": dict(
+            apply_unit_scale=True,
+            bake_space_transform=False,
+            axis_forward='Z',
+            axis_up='Y',
+            mesh_smooth_type='FACE',
+            add_leaf_bones=False,
+        ),
+        "obj": dict(
+            forward_axis='Z',
+            up_axis='Y',
+        )
+    }
+}
+
+# =============================================================
 # Propiedades del panel
 # =============================================================
 class ExportAssetSettings(PropertyGroup):
@@ -62,6 +142,18 @@ class ExportAssetSettings(PropertyGroup):
         ],
         default="FBX"
     )
+    engine_target: EnumProperty(
+        name="Motor de destino",
+        description="Configura parámetros de exportación según el motor",
+        items=[
+            ("UNREAL", "Unreal Engine", "Exportar optimizado para Unreal Engine"),
+            ("UNITY", "Unity", "Exportar optimizado para Unity"),
+            ("GODOT", "Godot", "Exportar optimizado para Godot"),
+            ("MAYA", "Maya", "Exportar optimizado para Autodesk Maya"),
+            ("GENERIC", "Genérico", "Exportación estándar sin ajustes específicos"),
+        ],
+        default="UNREAL"
+    )
 
 # =============================================================
 # FUNCIONES AUXILIARES
@@ -97,7 +189,6 @@ def rename_mesh_hierarchy(obj, parent_name=""):
         rename_mesh_hierarchy(child, new_name)
 
 def clean_collision_mesh(col):
-    """Elimina todos los modifiers y materiales de una colisión"""
     for mod in col.modifiers:
         col.modifiers.remove(mod)
     col.data.materials.clear()
@@ -111,7 +202,6 @@ def ensure_collisions(obj, operator):
         col.data.name = col.name
         bpy.context.collection.objects.link(col)
 
-        # Mantener ubicación/escala correctas al hacer hijo
         col.matrix_world = obj.matrix_world.copy()
         col.parent = obj
         col.matrix_parent_inverse = obj.matrix_world.inverted()
@@ -160,7 +250,6 @@ def generate_lods(obj, operator, num_lods, lod_ratios, generate_collision=True):
             col.data.name = col.name
             bpy.context.collection.objects.link(col)
 
-            # Mantener ubicación/escala correctas al hacer hijo
             col.matrix_world = lod_copy.matrix_world.copy()
             col.parent = lod_copy
             col.matrix_parent_inverse = lod_copy.matrix_world.inverted()
@@ -218,23 +307,22 @@ class EXPORT_OT_selected_obj(Operator):
             context.view_layer.objects.active = obj
 
             export_path = os.path.join(props.export_path, f"{export_name}.{props.export_format.lower()}")
+            engine = props.engine_target
+            preset = EXPORT_PRESETS[engine][props.export_format.lower()]
 
             if props.export_format == "FBX":
                 bpy.ops.export_scene.fbx(
                     filepath=export_path,
                     use_selection=True,
-                    apply_unit_scale=True,
-                    bake_space_transform=True,
-                    mesh_smooth_type='FACE',
-                    add_leaf_bones=False,
                     object_types={'MESH'},
                     use_mesh_modifiers=True,
-                    use_armature_deform_only=True
+                    **preset
                 )
             elif props.export_format == "OBJ":
                 bpy.ops.wm.obj_export(
                     filepath=export_path,
-                    export_selected_objects=True
+                    export_selected_objects=True,
+                    **preset
                 )
 
             self.report({'INFO'}, f"Exportado correctamente: {export_path}")
@@ -277,6 +365,7 @@ class EXPORT_PT_tool(Panel):
         layout.prop(props, "asset_name")
         layout.prop(props, "export_path")
         layout.prop(props, "export_format")
+        layout.prop(props, "engine_target")  # Nuevo selector de motor
         layout.prop(props, "export_collisions")
         layout.prop(props, "export_lods")
         if props.export_lods:
@@ -284,7 +373,6 @@ class EXPORT_PT_tool(Panel):
             for i in range(props.num_lods):
                 layout.prop(props, "lod_ratios", index=i, slider=True, text=f"LOD {i+1} ratio")
 
-        # Botón para aplicar Ctrl+A
         layout.operator(APPLY_OT_transforms.bl_idname, text="Aplicar Transformaciones (Ctrl+A)")
 
         layout.separator()
@@ -297,7 +385,7 @@ classes = (
     ExportAssetSettings,
     EXPORT_OT_selected_obj,
     EXPORT_PT_tool,
-    APPLY_OT_transforms,  # <-- añadido
+    APPLY_OT_transforms,
 )
 
 def register():
@@ -312,3 +400,4 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
